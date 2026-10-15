@@ -30,7 +30,6 @@ class UltraLightSearchAppV2:
         self.lbl_status = tk.Label(frame_top, text="状態: 準備完了", fg="green", font=("Meiryo", 9))
         self.lbl_status.pack(side=tk.LEFT, padx=10)
 
-        # 👇 フォルダ選択ボタンのすぐ下に「応答なし」に関する注意書きラベルを追加
         lbl_note = tk.Label(root, text="※インデックス作成中に画面が「（応答なし）」になることがありますが、裏で正常に処理中ですのでそのままお待ちください。", fg="#d32f2f", font=("Meiryo", 8, "italic"))
         lbl_note.pack(anchor="w", padx=15, pady=1)
 
@@ -48,7 +47,8 @@ class UltraLightSearchAppV2:
         sort_combo.pack(side=tk.LEFT, padx=5)
         sort_combo.bind("<<ComboboxSelected>>", lambda e: self.run_search())
 
-        tk.Button(frame_search, text="🔍 検索", command=self.run_search, bg="#c8e6c9", font=("Meiryo", 10, "bold"), width=10).pack(side=tk.LEFT, padx=5)
+        # 👇 ボタンのラベルを「検索」に変更
+        tk.Button(frame_search, text="検索", command=self.run_search, bg="#c8e6c9", font=("Meiryo", 10, "bold"), width=10).pack(side=tk.LEFT, padx=5)
 
         # --- 3. 提案エリア（関連ワード ＆ 要点ピックアップ） ---
         frame_suggest = tk.LabelFrame(root, text="💡 システムからの提案（要点まとめ ＆ 関連キーワード）", pady=5, padx=5, bg="#fffde7")
@@ -63,7 +63,6 @@ class UltraLightSearchAppV2:
         # --- 4. 検索結果リスト（ファイル単位の折りたたみカード表示） ---
         tk.Label(root, text="📄 該当ファイル一覧（＋ボタンで簡易プレビュー・保存・元ファイルを開く）", font=("Meiryo", 9, "bold")).pack(anchor="w", padx=10)
         
-        # スクロール可能な結果表示エリア
         self.canvas = tk.Canvas(root, bg="#f5f5f5")
         self.scrollbar = ttk.Scrollbar(root, orient="vertical", command=self.canvas.yview)
         self.scrollable_frame = tk.Frame(self.canvas, bg="#f5f5f5")
@@ -291,46 +290,3 @@ class UltraLightSearchAppV2:
             w for w in candidates
             if w not in STOP_WORDS
             and not any(w in kw or kw in w for kw in keywords)
-            and not w.isdigit()
-        ]
-        most_common = [w for w, _ in Counter(filtered).most_common(8)]
-
-        for widget in self.frame_chips.winfo_children():
-            widget.destroy()
-        if most_common:
-            tk.Label(self.frame_chips, text="💡 関連ワード（クリックで追加）: ", bg="#fffde7", font=("Meiryo", 9)).pack(side=tk.LEFT)
-            for word in most_common:
-                btn = tk.Button(self.frame_chips, text=f"＋ {word}", bg="#e3f2fd", relief=tk.FLAT,
-                                command=lambda w=word: self.add_keyword_and_search(w))
-                btn.pack(side=tk.LEFT, padx=2)
-
-        scored_sentences = []
-        seen = set()
-        for fname, loc, _, content, _ in rows:
-            lines = re.split(r'[\n。]', content)
-            for line in lines:
-                line = line.strip()
-                if len(line) < 12 or len(line) > 180 or line in seen:
-                    continue
-                seen.add(line)
-
-                kw_score = sum(3 for kw in keywords if kw.lower() in line.lower())
-                sig_score = sum(2 for sig in SIGNAL_WORDS if sig in line)
-                total_score = kw_score + sig_score
-
-                if kw_score > 0 and total_score >= 4:
-                    scored_sentences.append((total_score, f"📌 [{fname} ({loc})] {line}"))
-
-        scored_sentences.sort(key=lambda x: x[0], reverse=True)
-        self.txt_summary.delete("1.0", tk.END)
-        if scored_sentences:
-            self.txt_summary.insert(tk.END, "【自動抽出された重要ポイント・回答候補】\n")
-            for _, text in scored_sentences[:4]:
-                self.txt_summary.insert(tk.END, text + "\n")
-        else:
-            self.txt_summary.insert(tk.END, "※ ヒットした資料の中から、結論・回答に関する定型文は検出されませんでした。下のファイル一覧をご確認ください。")
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = UltraLightSearchAppV2(root)
-    root.mainloop()
