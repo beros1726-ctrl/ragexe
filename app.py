@@ -2,6 +2,7 @@ import os
 import re
 import sqlite3
 import shutil
+import threading  # 別スレッド処理用
 from datetime import datetime
 from collections import Counter
 import tkinter as tk
@@ -20,7 +21,6 @@ STOP_WORDS = {"こと", "もの", "ため", "これ", "それ", "あり", "な�
 class UltraLightSearchAppV2:
     def __init__(self, root):
         self.root = root
-        
         self.root.title("交通局 資料検索＆提案システム")
         self.root.geometry("1000x780")
 
@@ -28,14 +28,15 @@ class UltraLightSearchAppV2:
         frame_top = tk.Frame(root, pady=5)
         frame_top.pack(fill=tk.X, padx=10)
         
-        btn_update = tk.Button(frame_top, text="① 資料フォルダを選択して記憶（初回・更新）", command=self.build_index, bg="#e1f5fe", font=("Meiryo", 9, "bold"))
-        btn_update.pack(side=tk.LEFT, padx=5)
+        # ボタンを変数化して処理中に無効化できるようにする
+        self.btn_update = tk.Button(frame_top, text="① 資料フォルダを選択して記憶（差分更新）", command=self.build_index, bg="#e1f5fe", font=("Meiryo", 9, "bold"))
+        self.btn_update.pack(side=tk.LEFT, padx=5)
         
         self.lbl_status = tk.Label(frame_top, text="状態: 準備完了", fg="green", font=("Meiryo", 9))
         self.lbl_status.pack(side=tk.LEFT, padx=10)
 
-        # 👇 フォルダ選択ボタンのすぐ下に注意書きを追加
-        lbl_note = tk.Label(root, text="※インデックス作成中に画面が「（応答なし）」になることがありますが、裏で正常に処理中ですのでそのままお待ちください。", fg="#d32f2f", font=("Meiryo", 8, "italic"))
+        # 応答なし注意書きを前向きなメッセージに変更
+        lbl_note = tk.Label(root, text="※2回目以降は追加・更新されたファイルだけを自動検知して「数秒」で差分更新します。", fg="#0277bd", font=("Meiryo", 8, "italic"))
         lbl_note.pack(anchor="w", padx=15, pady=1)
 
         # --- 2. 検索バー ＆ ソート ---
@@ -46,7 +47,6 @@ class UltraLightSearchAppV2:
         self.ent_keyword.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         self.ent_keyword.bind("<Return>", lambda event: self.run_search())
 
-        # 👇 日付順ソート機能
         tk.Label(frame_search, text="並び順:", font=("Meiryo", 9)).pack(side=tk.LEFT, padx=5)
         self.sort_var = tk.StringVar(value="新着順")
         sort_combo = ttk.Combobox(frame_search, textvariable=self.sort_var, values=["新着順（新しい順）", "古い順", "関連度順"], width=15, state="readonly")
@@ -123,36 +123,91 @@ class UltraLightSearchAppV2:
         folder = filedialog.askdirectory(title="照会関係資料フォルダを選択")
         if not folder:
             return
-        self.lbl_status.config(text="状態: 高速インデックス作成中...", fg="blue")
-        self.root.update()
+        
+        # UIの一時ロック（二重クリック防止）
+        self.btn_update.config(state=tk.DISABLED)
+        self.lbl_status.config(text="状態: フォルダをスキャン中...", fg="blue")
+        
+        # 別スレッドで重い処理を開始（画面フリーズを回避）
+        threading.Thread(target=self._build_index_thread, args=(folder,), daemon=True).start()
 
+    def _build_index_thread(self, folder):
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        c.execute("DROP TABLE IF EXISTS docs")
-        c.execute("CREATE VIRTUAL TABLE docs USING fts5(filename, location, filepath, content, mtime UNINDEXED, tokenize='trigram')")
+        
+        # 初回起動時のテーブル作成（すでにあればそのまま）
+        c.execute("CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(filename, location, filepath, content, mtime UNINDEXED, tokenize='trigram')")
 
-        file_count = 0
+        # 【差分更新のキモ】現在DBにあるファイルの最終更新日時リストを取得
+        c.execute("SELECT filepath, MAX(mtime) FROM docs GROUP BY filepath")
+        existing_files = {row[0]: row[1] for row in c.fetchall()}
+        
+        current_files = set()
+        to_insert = []
+        to_delete = []
+
+        # 1. フォルダ走査：新規と更新されたファイルを探す
         for root_dir, _, files in os.walk(folder):
             for f in files:
-                if f.startswith("~$"):
-                    continue
+                if f.startswith("~$"): continue
                 if f.lower().endswith((".xlsx", ".docx", ".pdf", ".txt", ".csv")):
                     fullpath = os.path.join(root_dir, f)
+                    current_files.add(fullpath)
+                    
                     try:
                         mtime = os.path.getmtime(fullpath)
                     except:
                         mtime = 0.0
+                        
+                    if fullpath in existing_files:
+                        # 既存ファイルだが、PC上の日付の方が新しい場合は「更新」対象
+                        if mtime > existing_files[fullpath]:
+                            to_delete.append(fullpath)
+                            to_insert.append((fullpath, f, mtime))
+                    else:
+                        # 全く新しいファイル
+                        to_insert.append((fullpath, f, mtime))
 
-                    chunks = self.extract_text(fullpath)
-                    if chunks:
-                        for loc, content in chunks:
-                            c.execute("INSERT INTO docs VALUES (?, ?, ?, ?, ?)", (f, loc, fullpath, content, mtime))
-                        file_count += 1
+        # 2. フォルダから削除されたファイル（リンク切れ）を探す
+        for filepath in existing_files:
+            if filepath not in current_files:
+                to_delete.append(filepath)
+
+        # 変更が何もなかった場合は即終了
+        if not to_insert and not to_delete:
+            conn.close()
+            self.root.after(0, lambda: self.lbl_status.config(text="状態: 変更なし（インデックスは最新です）", fg="green"))
+            self.root.after(0, lambda: messagebox.showinfo("完了", "変更されたファイルはありませんでした。"))
+            self.root.after(0, lambda: self.btn_update.config(state=tk.NORMAL))
+            return
+
+        # 3. DBから古いデータを削除
+        if to_delete:
+            for filepath in to_delete:
+                c.execute("DELETE FROM docs WHERE filepath=?", (filepath,))
+            conn.commit()
+
+        # 4. 新規・更新ファイルだけを読み込み
+        total_targets = len(to_insert)
+        for i, (fullpath, f, mtime) in enumerate(to_insert, 1):
+            # 進捗のリアルタイム表示（5件ごと または 初回）
+            if i % 5 == 0 or i == 1:
+                self.root.after(0, lambda count=i, total=total_targets: self.lbl_status.config(text=f"状態: ファイル読み込み中... ({count} / {total}件)", fg="blue"))
+
+            chunks = self.extract_text(fullpath)
+            if chunks:
+                for loc, content in chunks:
+                    c.execute("INSERT INTO docs VALUES (?, ?, ?, ?, ?)", (f, loc, fullpath, content, mtime))
 
         conn.commit()
         conn.close()
-        self.lbl_status.config(text=f"状態: 記憶完了 ({file_count}ファイル)", fg="green")
-        messagebox.showinfo("完了", f"{file_count} 個のファイルを高速データベースに記憶しました。")
+        
+        # 処理完了後のGUI更新
+        success_msg = f"インデックスの差分更新が完了しました。\n\n・追加/更新したファイル: {total_targets}件\n・削除/リンク切れ解消: {len(to_delete)}件"
+        self.root.after(0, lambda: self.lbl_status.config(text=f"状態: 記憶完了 (新規・更新: {total_targets}件, 削除: {len(to_delete)}件)", fg="green"))
+        self.root.after(0, lambda: messagebox.showinfo("完了", success_msg))
+        self.root.after(0, lambda: self.btn_update.config(state=tk.NORMAL))
+
 
     def add_keyword_and_search(self, word):
         current = self.ent_keyword.get().strip()
@@ -166,11 +221,10 @@ class UltraLightSearchAppV2:
             if os.path.exists(filepath):
                 os.startfile(filepath)
             else:
-                messagebox.showerror("エラー", "ファイルが見つからないか、移動・削除されています。")
+                messagebox.showerror("エラー", "ファイルが見つからないか、移動・削除されています。再度①の記憶ボタンを押してください。")
         except Exception as e:
             messagebox.showerror("エラー", f"ファイルを開けませんでした: {e}")
 
-    # 👇 指定場所への別名保存（ダウンロード）機能
     def save_file_to(self, filepath):
         if not os.path.exists(filepath):
             messagebox.showerror("エラー", "元ファイルが見つかりません。")
@@ -240,7 +294,6 @@ class UltraLightSearchAppV2:
 
         self.analyze_and_propose(keywords, rows)
 
-        # ファイルごとにグループ化してカード表示
         file_dict = {}
         for fname, loc, fpath, content, mtime in rows:
             if fpath not in file_dict:
@@ -256,7 +309,6 @@ class UltraLightSearchAppV2:
             header_frame = tk.Frame(card, bg="white")
             header_frame.pack(fill=tk.X)
 
-            # 👇 折りたたみボタン
             toggle_btn = tk.Button(header_frame, text="＋ 詳細", width=6, bg="#e0e0e0", relief=tk.FLAT)
             toggle_btn.pack(side=tk.LEFT, padx=2)
 
@@ -270,7 +322,6 @@ class UltraLightSearchAppV2:
             btn_save = tk.Button(header_frame, text="📥 保存", bg="#e3f2fd", relief=tk.FLAT, command=lambda p=fpath: self.save_file_to(p))
             btn_save.pack(side=tk.RIGHT, padx=2)
 
-            # プレビュー展開エリア（最初は非表示）
             preview_frame = tk.Frame(card, bg="#fafafa", padx=5, pady=5)
             
             txt_preview = scrolledtext.Text(preview_frame, height=6, bg="#ffffff", font=("Meiryo", 9), wrap=tk.WORD)
