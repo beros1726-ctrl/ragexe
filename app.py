@@ -2,11 +2,12 @@ import os
 import re
 import sqlite3
 import shutil
-import subprocess
 from datetime import datetime
 from collections import Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, scrolledtext
+
+# 外部ライブラリ（エラーが出ないようシンプルにインポート）
 import openpyxl
 import docx
 from pypdf import PdfReader
@@ -26,7 +27,9 @@ class UltraLightSearchAppV2:
         frame_top = tk.Frame(root, pady=5)
         frame_top.pack(fill=tk.X, padx=10)
         
-        tk.Button(frame_top, text="① 資料フォルダを選択して記憶（初回・更新）", command=self.build_index, bg="#e1f5fe", font=("Meiryo", 9, "bold")).pack(side=tk.LEFT, padx=5)
+        btn_update = tk.Button(frame_top, text="① 資料フォルダを選択して記憶（初回・更新）", command=self.build_index, bg="#e1f5fe", font=("Meiryo", 9, "bold"))
+        btn_update.pack(side=tk.LEFT, padx=5)
+        
         self.lbl_status = tk.Label(frame_top, text="状態: 準備完了", fg="green", font=("Meiryo", 9))
         self.lbl_status.pack(side=tk.LEFT, padx=10)
 
@@ -47,8 +50,8 @@ class UltraLightSearchAppV2:
         sort_combo.pack(side=tk.LEFT, padx=5)
         sort_combo.bind("<<ComboboxSelected>>", lambda e: self.run_search())
 
-        # 👇 ボタンのラベルを「検索」に変更
-        tk.Button(frame_search, text="検索", command=self.run_search, bg="#c8e6c9", font=("Meiryo", 10, "bold"), width=10).pack(side=tk.LEFT, padx=5)
+        btn_search = tk.Button(frame_search, text="検索", command=self.run_search, bg="#c8e6c9", font=("Meiryo", 10, "bold"), width=10)
+        btn_search.pack(side=tk.LEFT, padx=5)
 
         # --- 3. 提案エリア（関連ワード ＆ 要点ピックアップ） ---
         frame_suggest = tk.LabelFrame(root, text="💡 システムからの提案（要点まとめ ＆ 関連キーワード）", pady=5, padx=5, bg="#fffde7")
@@ -67,10 +70,7 @@ class UltraLightSearchAppV2:
         self.scrollbar = ttk.Scrollbar(root, orient="vertical", command=self.canvas.yview)
         self.scrollable_frame = tk.Frame(self.canvas, bg="#f5f5f5")
 
-        self.scrollable_frame.bind(
-            "<Configure>",
-            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        )
+        self.scrollable_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
 
@@ -101,11 +101,12 @@ class UltraLightSearchAppV2:
                 for i in range(0, len(full_txt), 700):
                     chunks.append(("Word本文", full_txt[i:i+800]))
             elif ext == ".pdf":
-                reader = PdfReader(filepath)
-                for idx, page in enumerate(reader.pages):
-                    t = page.extract_text()
-                    if t and t.strip():
-                        chunks.append((f"P.{idx+1}", t.strip()))
+                with open(filepath, "rb") as f:
+                    reader = PdfReader(f)
+                    for idx, page in enumerate(reader.pages):
+                        t = page.extract_text()
+                        if t and t.strip():
+                            chunks.append((f"P.{idx+1}", t.strip()))
             elif ext in [".txt", ".csv"]:
                 with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
                     full_txt = f.read()
@@ -179,6 +180,17 @@ class UltraLightSearchAppV2:
             except Exception as e:
                 messagebox.showerror("エラー", f"保存に失敗しました: {e}")
 
+    # トグルボタンのコマンドを作るための安全なクロージャ関数
+    def make_toggle_cmd(self, pf, btn):
+        def toggle():
+            if pf.winfo_ismapped():
+                pf.pack_forget()
+                btn.config(text="＋ 詳細")
+            else:
+                pf.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+                btn.config(text="－ 閉じる")
+        return toggle
+
     def run_search(self):
         kw_input = self.ent_keyword.get().strip()
         if not kw_input:
@@ -215,6 +227,7 @@ class UltraLightSearchAppV2:
 
         conn.close()
 
+        # 表示リセット
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
         self.txt_summary.delete("1.0", tk.END)
@@ -273,20 +286,50 @@ class UltraLightSearchAppV2:
                     start_pos = end_pos
             txt_preview.config(state=tk.DISABLED)
 
-            def toggle_preview(pf=preview_frame, btn=toggle_btn):
-                if pf.winfo_ismapped():
-                    pf.pack_forget()
-                    btn.config(text="＋ 詳細")
-                else:
-                    pf.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-                    btn.config(text="－ 閉じる")
-
-            toggle_btn.config(command=toggle_preview)
+            # トグルアクションを安全なクロージャ関数でバインド
+            toggle_btn.config(command=self.make_toggle_cmd(preview_frame, toggle_btn))
 
     def analyze_and_propose(self, keywords, rows):
         all_text = "\n".join([r[3] for r in rows])
         candidates = re.findall(r'[一-龥ァ-ヶーa-zA-Z0-9]{2,8}', all_text)
-        filtered = [
-            w for w in candidates
-            if w not in STOP_WORDS
-            and not any(w in kw or kw in w for kw in keywords)
+        filtered = [w for w in candidates if w not in STOP_WORDS and not any(w in kw or kw in w for kw in keywords) and not w.isdigit()]
+        most_common = [w for w, _ in Counter(filtered).most_common(8)]
+
+        for widget in self.frame_chips.winfo_children():
+            widget.destroy()
+        if most_common:
+            tk.Label(self.frame_chips, text="💡 関連ワード（クリックで追加）: ", bg="#fffde7", font=("Meiryo", 9)).pack(side=tk.LEFT)
+            for word in most_common:
+                btn = tk.Button(self.frame_chips, text=f"＋ {word}", bg="#e3f2fd", relief=tk.FLAT, command=lambda w=word: self.add_keyword_and_search(w))
+                btn.pack(side=tk.LEFT, padx=2)
+
+        scored_sentences = []
+        seen = set()
+        for fname, loc, _, content, _ in rows:
+            lines = re.split(r'[\n。]', content)
+            for line in lines:
+                line = line.strip()
+                if len(line) < 12 or len(line) > 180 or line in seen:
+                    continue
+                seen.add(line)
+
+                kw_score = sum(3 for kw in keywords if kw.lower() in line.lower())
+                sig_score = sum(2 for sig in SIGNAL_WORDS if sig in line)
+                total_score = kw_score + sig_score
+
+                if kw_score > 0 and total_score >= 4:
+                    scored_sentences.append((total_score, f"📌 [{fname} ({loc})] {line}"))
+
+        scored_sentences.sort(key=lambda x: x[0], reverse=True)
+        self.txt_summary.delete("1.0", tk.END)
+        if scored_sentences:
+            self.txt_summary.insert(tk.END, "【自動抽出された重要ポイント・回答候補】\n")
+            for _, text in scored_sentences[:4]:
+                self.txt_summary.insert(tk.END, text + "\n")
+        else:
+            self.txt_summary.insert(tk.END, "※ ヒットした資料の中から、結論・回答に関する定型文は検出されませんでした。下のファイル一覧をご確認ください。")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = UltraLightSearchAppV2(root)
+    root.mainloop()
