@@ -20,7 +20,7 @@ STOP_WORDS = {"こと", "もの", "ため", "これ", "それ", "あり", "な�
 class UltraLightSearchAppV2:
     def __init__(self, root):
         self.root = root
-        # 👇 タイトルを「交通局 資料検索＆提案システム」に変更
+        
         self.root.title("交通局 資料検索＆提案システム")
         self.root.geometry("1000x780")
 
