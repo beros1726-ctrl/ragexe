@@ -7,7 +7,7 @@ from collections import Counter
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, scrolledtext
 
-# 外部ライブラリ（エラーが出ないようシンプルにインポート）
+# 外部ライブラリ
 import openpyxl
 import docx
 from pypdf import PdfReader
@@ -20,6 +20,7 @@ STOP_WORDS = {"こと", "もの", "ため", "これ", "それ", "あり", "な�
 class UltraLightSearchAppV2:
     def __init__(self, root):
         self.root = root
+        # 👇 タイトルを「交通局 資料検索＆提案システム」に変更
         self.root.title("交通局 資料検索＆提案システム")
         self.root.geometry("1000x780")
 
@@ -33,6 +34,7 @@ class UltraLightSearchAppV2:
         self.lbl_status = tk.Label(frame_top, text="状態: 準備完了", fg="green", font=("Meiryo", 9))
         self.lbl_status.pack(side=tk.LEFT, padx=10)
 
+        # 👇 フォルダ選択ボタンのすぐ下に注意書きを追加
         lbl_note = tk.Label(root, text="※インデックス作成中に画面が「（応答なし）」になることがありますが、裏で正常に処理中ですのでそのままお待ちください。", fg="#d32f2f", font=("Meiryo", 8, "italic"))
         lbl_note.pack(anchor="w", padx=15, pady=1)
 
@@ -44,6 +46,7 @@ class UltraLightSearchAppV2:
         self.ent_keyword.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         self.ent_keyword.bind("<Return>", lambda event: self.run_search())
 
+        # 👇 日付順ソート機能
         tk.Label(frame_search, text="並び順:", font=("Meiryo", 9)).pack(side=tk.LEFT, padx=5)
         self.sort_var = tk.StringVar(value="新着順")
         sort_combo = ttk.Combobox(frame_search, textvariable=self.sort_var, values=["新着順（新しい順）", "古い順", "関連度順"], width=15, state="readonly")
@@ -167,6 +170,7 @@ class UltraLightSearchAppV2:
         except Exception as e:
             messagebox.showerror("エラー", f"ファイルを開けませんでした: {e}")
 
+    # 👇 指定場所への別名保存（ダウンロード）機能
     def save_file_to(self, filepath):
         if not os.path.exists(filepath):
             messagebox.showerror("エラー", "元ファイルが見つかりません。")
@@ -180,7 +184,6 @@ class UltraLightSearchAppV2:
             except Exception as e:
                 messagebox.showerror("エラー", f"保存に失敗しました: {e}")
 
-    # トグルボタンのコマンドを作るための安全なクロージャ関数
     def make_toggle_cmd(self, pf, btn):
         def toggle():
             if pf.winfo_ismapped():
@@ -227,7 +230,6 @@ class UltraLightSearchAppV2:
 
         conn.close()
 
-        # 表示リセット
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
         self.txt_summary.delete("1.0", tk.END)
@@ -238,6 +240,7 @@ class UltraLightSearchAppV2:
 
         self.analyze_and_propose(keywords, rows)
 
+        # ファイルごとにグループ化してカード表示
         file_dict = {}
         for fname, loc, fpath, content, mtime in rows:
             if fpath not in file_dict:
@@ -253,6 +256,7 @@ class UltraLightSearchAppV2:
             header_frame = tk.Frame(card, bg="white")
             header_frame.pack(fill=tk.X)
 
+            # 👇 折りたたみボタン
             toggle_btn = tk.Button(header_frame, text="＋ 詳細", width=6, bg="#e0e0e0", relief=tk.FLAT)
             toggle_btn.pack(side=tk.LEFT, padx=2)
 
@@ -266,6 +270,7 @@ class UltraLightSearchAppV2:
             btn_save = tk.Button(header_frame, text="📥 保存", bg="#e3f2fd", relief=tk.FLAT, command=lambda p=fpath: self.save_file_to(p))
             btn_save.pack(side=tk.RIGHT, padx=2)
 
+            # プレビュー展開エリア（最初は非表示）
             preview_frame = tk.Frame(card, bg="#fafafa", padx=5, pady=5)
             
             txt_preview = scrolledtext.Text(preview_frame, height=6, bg="#ffffff", font=("Meiryo", 9), wrap=tk.WORD)
@@ -286,7 +291,6 @@ class UltraLightSearchAppV2:
                     start_pos = end_pos
             txt_preview.config(state=tk.DISABLED)
 
-            # トグルアクションを安全なクロージャ関数でバインド
             toggle_btn.config(command=self.make_toggle_cmd(preview_frame, toggle_btn))
 
     def analyze_and_propose(self, keywords, rows):
