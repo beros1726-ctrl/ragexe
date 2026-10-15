@@ -19,15 +19,20 @@ STOP_WORDS = {"こと", "もの", "ため", "これ", "それ", "あり", "な�
 class UltraLightSearchAppV2:
     def __init__(self, root):
         self.root = root
-        self.root.title("照会資料 検索・保存システム (拡張版)")
-        self.root.geometry("1000x750")
+        self.root.title("交通局 資料検索＆提案システム")
+        self.root.geometry("1000x780")
 
         # --- 1. 上部：フォルダ選択＆インデックス更新 ---
         frame_top = tk.Frame(root, pady=5)
         frame_top.pack(fill=tk.X, padx=10)
+        
         tk.Button(frame_top, text="① 資料フォルダを選択して記憶（初回・更新）", command=self.build_index, bg="#e1f5fe", font=("Meiryo", 9, "bold")).pack(side=tk.LEFT, padx=5)
         self.lbl_status = tk.Label(frame_top, text="状態: 準備完了", fg="green", font=("Meiryo", 9))
         self.lbl_status.pack(side=tk.LEFT, padx=10)
+
+        # 👇 フォルダ選択ボタンのすぐ下に「応答なし」に関する注意書きラベルを追加
+        lbl_note = tk.Label(root, text="※インデックス作成中に画面が「（応答なし）」になることがありますが、裏で正常に処理中ですのでそのままお待ちください。", fg="#d32f2f", font=("Meiryo", 8, "italic"))
+        lbl_note.pack(anchor="w", padx=15, pady=1)
 
         # --- 2. 検索バー ＆ ソート ---
         frame_search = tk.LabelFrame(root, text="② キーワード検索 ＆ 並び替え", pady=5, padx=5)
@@ -121,7 +126,6 @@ class UltraLightSearchAppV2:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("DROP TABLE IF EXISTS docs")
-        # mtime (更新日時) を UNINDEXED カラムとして保持し、ソート可能にする
         c.execute("CREATE VIRTUAL TABLE docs USING fts5(filename, location, filepath, content, mtime UNINDEXED, tokenize='trigram')")
 
         file_count = 0
@@ -157,7 +161,7 @@ class UltraLightSearchAppV2:
     def open_file(self, filepath):
         try:
             if os.path.exists(filepath):
-                os.startfile(filepath) # Windows環境
+                os.startfile(filepath)
             else:
                 messagebox.showerror("エラー", "ファイルが見つからないか、移動・削除されています。")
         except Exception as e:
@@ -188,14 +192,13 @@ class UltraLightSearchAppV2:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
 
-        # ソート順の決定
         sort_mode = self.sort_var.get()
         if "新着順" in sort_mode:
             order_sql = " ORDER BY mtime DESC"
         elif "古い順" in sort_mode:
             order_sql = " ORDER BY mtime ASC"
         else:
-            order_sql = "" # 関連度順（FTS5デフォルト）
+            order_sql = ""
 
         fts_words = [f'"{w}"' for w in keywords if len(w) >= 3]
         if fts_words:
@@ -213,7 +216,6 @@ class UltraLightSearchAppV2:
 
         conn.close()
 
-        # 既存の結果カードをクリア
         for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
         self.txt_summary.delete("1.0", tk.END)
@@ -222,28 +224,23 @@ class UltraLightSearchAppV2:
             self.txt_summary.insert(tk.END, "該当する資料が見つかりませんでした。")
             return
 
-        # 関連ワード提案 ＆ 要点ピックアップ
         self.analyze_and_propose(keywords, rows)
 
-        # ファイルごとにグループ化（同じファイル名の抜粋をまとめる）
         file_dict = {}
         for fname, loc, fpath, content, mtime in rows:
             if fpath not in file_dict:
                 file_dict[fpath] = {"filename": fname, "mtime": mtime, "snippets": []}
             file_dict[fpath]["snippets"].append((loc, content))
 
-        # 画面にファイルごとのカード（折りたたみ式）を作成
         for fpath, data in file_dict.items():
             date_str = datetime.fromtimestamp(data["mtime"]).strftime('%Y-%m-%d %H:%M') if data["mtime"] > 0 else "不明"
             
             card = tk.LabelFrame(self.scrollable_frame, bg="white", padx=5, pady=5)
             card.pack(fill=tk.X, padx=5, pady=4)
 
-            # ヘッダー行（ファイル名、日付、各種ボタン）
             header_frame = tk.Frame(card, bg="white")
             header_frame.pack(fill=tk.X)
 
-            # 折りたたみ用トグルボタン
             toggle_btn = tk.Button(header_frame, text="＋ 詳細", width=6, bg="#e0e0e0", relief=tk.FLAT)
             toggle_btn.pack(side=tk.LEFT, padx=2)
 
@@ -251,26 +248,21 @@ class UltraLightSearchAppV2:
             lbl_info = tk.Label(header_frame, text=info_text, bg="white", font=("Meiryo", 9, "bold"), anchor="w")
             lbl_info.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
-            # ボタン：元ファイルを開く
             btn_open = tk.Button(header_frame, text="📁 開く", bg="#e8f5e9", relief=tk.FLAT, command=lambda p=fpath: self.open_file(p))
             btn_open.pack(side=tk.RIGHT, padx=2)
 
-            # ボタン：別名で保存（ダウンロード）
             btn_save = tk.Button(header_frame, text="📥 保存", bg="#e3f2fd", relief=tk.FLAT, command=lambda p=fpath: self.save_file_to(p))
             btn_save.pack(side=tk.RIGHT, padx=2)
 
-            # プレビュー展開エリア（最初は非表示）
             preview_frame = tk.Frame(card, bg="#fafafa", padx=5, pady=5)
             
             txt_preview = scrolledtext.Text(preview_frame, height=6, bg="#ffffff", font=("Meiryo", 9), wrap=tk.WORD)
             txt_preview.pack(fill=tk.BOTH, expand=True)
             txt_preview.tag_config("highlight", background="#ffff00", foreground="#d50000")
 
-            # プレビュー文章を挿入
             for loc, content in data["snippets"]:
                 txt_preview.insert(tk.END, f"【{loc}】\n{content.strip()}\n\n" + "-"*50 + "\n")
 
-            # ハイライト処理
             for kw in keywords:
                 start_pos = "1.0"
                 while True:
@@ -282,7 +274,6 @@ class UltraLightSearchAppV2:
                     start_pos = end_pos
             txt_preview.config(state=tk.DISABLED)
 
-            # ＋／－ボタンの動作切替
             def toggle_preview(pf=preview_frame, btn=toggle_btn):
                 if pf.winfo_ismapped():
                     pf.pack_forget()
